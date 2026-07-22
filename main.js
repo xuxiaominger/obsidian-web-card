@@ -182,11 +182,7 @@ var WebCardPlugin = class extends import_obsidian.Plugin {
       icon: "quote",
       hotkeys: [{ modifiers: ["Mod", "Shift"], key: "V" }],
       editorCallback: async (editor) => {
-        const text = await navigator.clipboard.readText();
-        if (!text || text.trim().length === 0) {
-          new import_obsidian.Notice("\u526A\u8D34\u677F\u4E3A\u7A7A");
-          return;
-        }
+        let content = "";
         let url = "";
         try {
           const clipboardItems = await navigator.clipboard.read();
@@ -194,20 +190,29 @@ var WebCardPlugin = class extends import_obsidian.Plugin {
             if (item.types.includes("text/html")) {
               const blob = item.getType("text/html");
               const html = await (await blob).text();
-              const match = html.match(/SourceURL:\s*(https?:\/\/[^\s<"]+)/i);
-              if (match) url = match[1];
+              const urlMatch = html.match(/SourceURL:\s*(https?:\/\/[^\s<"]+)/i);
+              if (urlMatch) url = urlMatch[1];
+              const parser = new DOMParser();
+              const doc = parser.parseFromString(html, "text/html");
+              const bodyText = doc.body?.textContent?.trim() || "";
+              if (bodyText.length > 0) content = bodyText;
             }
-            if (item.types.includes("text/uri-list")) {
-              const blob = item.getType("text/uri-list");
-              const uriList = await (await blob).text();
+            if (!url && item.types.includes("text/uri-list")) {
+              const blob2 = item.getType("text/uri-list");
+              const uriList = await (await blob2).text();
               if (uriList.trim()) url = uriList.trim().split("\n")[0];
             }
           }
         } catch {
         }
+        if (!content) content = await navigator.clipboard.readText();
+        if (!content || content.trim().length === 0) {
+          new import_obsidian.Notice("\u526A\u8D34\u677F\u4E3A\u7A7A");
+          return;
+        }
         new CardEditModal(
           this.app,
-          text.trim(),
+          content.trim(),
           url,
           this.settings,
           (result) => {
