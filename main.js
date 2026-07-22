@@ -185,11 +185,11 @@ var WebCardPlugin = class extends import_obsidian.Plugin {
         let content = "";
         let url = "";
         try {
-          const clipboardItems = await navigator.clipboard.read();
-          for (const item of clipboardItems) {
-            if (item.types.includes("text/html")) {
-              const blob = item.getType("text/html");
-              const html = await (await blob).text();
+          const electron = window.require ? window.require("electron") : null;
+          if (electron && electron.clipboard) {
+            const html = electron.clipboard.readHTML();
+            const plainText = electron.clipboard.readText();
+            if (html) {
               const urlMatch = html.match(/SourceURL:\s*(https?:\/\/[^\s<"]+)/i);
               if (urlMatch) url = urlMatch[1];
               const parser = new DOMParser();
@@ -197,17 +197,45 @@ var WebCardPlugin = class extends import_obsidian.Plugin {
               const bodyText = doc.body?.textContent?.trim() || "";
               if (bodyText.length > 0) content = bodyText;
             }
-            if (!url && item.types.includes("text/uri-list")) {
-              const blob2 = item.getType("text/uri-list");
-              const uriList = await (await blob2).text();
-              if (uriList.trim()) url = uriList.trim().split("\n")[0];
+            if (!content && plainText && !/^https?:\/\//.test(plainText.trim())) {
+              content = plainText;
             }
           }
         } catch {
         }
-        if (!content) content = await navigator.clipboard.readText();
+        if (!content) {
+          try {
+            const clipboardItems = await navigator.clipboard.read();
+            for (const item of clipboardItems) {
+              if (item.types.includes("text/html")) {
+                const blob = item.getType("text/html");
+                const html2 = await (await blob).text();
+                const urlMatch2 = html2.match(/SourceURL:\s*(https?:\/\/[^\s<"]+)/i);
+                if (urlMatch2 && !url) url = urlMatch2[1];
+                if (!content) {
+                  const parser2 = new DOMParser();
+                  const doc2 = parser2.parseFromString(html2, "text/html");
+                  const bodyText2 = doc2.body?.textContent?.trim() || "";
+                  if (bodyText2.length > 0) content = bodyText2;
+                }
+              }
+              if (!url && item.types.includes("text/uri-list")) {
+                const blob3 = item.getType("text/uri-list");
+                const uriList = await (await blob3).text();
+                if (uriList.trim()) url = uriList.trim().split("\n")[0];
+              }
+            }
+          } catch {
+          }
+        }
+        if (!content) {
+          const fallbackText = await navigator.clipboard.readText();
+          if (fallbackText && !/^https?:\/\//.test(fallbackText.trim())) {
+            content = fallbackText;
+          }
+        }
         if (!content || content.trim().length === 0) {
-          new import_obsidian.Notice("\u526A\u8D34\u677F\u4E3A\u7A7A");
+          new import_obsidian.Notice("剪贴板为空");
           return;
         }
         new CardEditModal(
