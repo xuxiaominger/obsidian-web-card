@@ -1,0 +1,11 @@
+{
+	"id": "web-card",
+	"name": "Web Card",
+	"version": "1.0.0",
+	"minAppVersion": "0.15.0",
+	"description": "Paste web highlights into beautiful info cards — 一键粘贴网页高亮为精美信息卡片",
+	"author": "Hermes",
+	"authorUrl": "https://github.com/xuxiaominger/obsidian-web-card",
+	"fundingUrl": "https://github.com/xuxiaominger/obsidian-web-card",
+	"isDesktopOnly": false
+}
