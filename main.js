@@ -59,18 +59,16 @@ function generateCard(text, url, settings) {
   const date = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
   const escapedText = text.replace(/\n{3,}/g, "\n\n").trim();
   const safeText = escapedText.replace(/\[/g, "\\[").replace(/\]/g, "\\]").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
-  let card = "";
   switch (settings.defaultFormat) {
     case "callout":
-      card = `> [!quote]+ ${siteName}
+      return `> [!quote]+ ${siteName}
 > ${safeText.replace(/\n/g, "\n> ")}
 >
 > — *来源：[${siteName}](${formattedUrl})*  ·  ${date}
 
 `;
-      break;
     case "codeblock":
-      card = `\`\`\`card
+      return `\`\`\`card
 📝 ${safeText}
 
 🔗 [${siteName}](${formattedUrl})
@@ -78,9 +76,8 @@ function generateCard(text, url, settings) {
 \`\`\`
 
 `;
-      break;
     case "embed":
-      card = `---
+      return `---
 source: "${formattedUrl}"
 site: "${siteName}"
 date: ${date}
@@ -93,9 +90,7 @@ date: ${date}
 🔗 [${siteName}](${formattedUrl}) · ${date}
 
 `;
-      break;
   }
-  return card;
 }
 var CardEditModal = class extends import_obsidian.Modal {
   constructor(app, text, url, settings, onSubmit) {
@@ -110,7 +105,7 @@ var CardEditModal = class extends import_obsidian.Modal {
     contentEl.empty();
     contentEl.addClass("web-card-modal");
     contentEl.createEl("h2", { text: "📇 创建 Web Card" });
-    contentEl.createEl("label", { text: "高亮内容" });
+    contentEl.createEl("label", { text: "高亮内容（粘贴后自动识别来源）" });
     const textArea = contentEl.createEl("textarea", {
       attr: {
         rows: "8",
@@ -118,14 +113,31 @@ var CardEditModal = class extends import_obsidian.Modal {
       }
     });
     textArea.value = this.text;
-    contentEl.createEl("label", { text: "来源网址" });
     const urlInput = contentEl.createEl("input", {
       type: "url",
       attr: {
-        style: "width:100%;margin-bottom:8px;padding:8px;border-radius:6px;border:1px solid var(--background-modifier-border);background:var(--background-primary);color:var(--text-normal);"
+        style: "width:100%;margin-bottom:8px;padding:8px;border-radius:6px;border:1px solid var(--background-modifier-border);background:var(--background-primary);color:var(--text-normal);",
+        placeholder: "来源网址（自动识别，也可手动填写）"
       }
     });
     urlInput.value = this.url;
+    const that = this;
+    textArea.addEventListener("paste", function(e) {
+      setTimeout(function() {
+        const val = textArea.value;
+        if (val && /^https?:\/\//.test(val.trim()) && !urlInput.value) {
+          urlInput.value = val.trim();
+          return;
+        }
+        if (e.clipboardData) {
+          const html = e.clipboardData.getData("text/html");
+          if (html && !urlInput.value) {
+            const m = html.match(/SourceURL:\s*(https?:\/\/[^\s<"]+)/i);
+            if (m) urlInput.value = m[1];
+          }
+        }
+      }, 50);
+    });
     const preview = contentEl.createEl("div", {
       attr: {
         style: "font-size:0.85em;color:var(--text-muted);margin-bottom:16px;padding:8px;background:var(--background-secondary);border-radius:6px;"
@@ -176,23 +188,6 @@ var CardEditModal = class extends import_obsidian.Modal {
     this.contentEl.empty();
   }
 };
-
-function readClipboardHTML() {
-  let html = "", text = "", uriList = "";
-  try {
-    const eReq = typeof require !== "undefined" ? require : null;
-    const winReq = window.require || null;
-    const er = (eReq && eReq("electron")) || (winReq && winReq("electron")) || null;
-    if (er && er.clipboard) {
-      html = er.clipboard.readHTML() || "";
-      text = er.clipboard.readText() || "";
-      try { uriList = er.clipboard.read("text/uri-list") || ""; } catch {}
-      return { html, text, uriList, source: "electron" };
-    }
-  } catch {}
-  return { html: "", text: "", uriList: "", source: "none" };
-}
-
 var WebCardPlugin = class extends import_obsidian.Plugin {
   async onload() {
     await this.loadSettings();
@@ -201,56 +196,11 @@ var WebCardPlugin = class extends import_obsidian.Plugin {
       name: "Paste as Web Card",
       icon: "quote",
       hotkeys: [{ modifiers: ["Mod", "Shift"], key: "V" }],
-      editorCallback: async (editor) => {
-        let content = "", url = "", debugSource = "";
-        let cb = readClipboardHTML();
-        if (cb.html) {
-          debugSource = "electron:" + cb.source;
-          const m = cb.html.match(/SourceURL:\s*(https?:\/\/[^\s<"]+)/i);
-          if (m) url = m[1];
-          const d = new DOMParser().parseFromString(cb.html, "text/html");
-          const t = d.body && d.body.textContent ? d.body.textContent.trim() : "";
-          if (t) { content = t; }
-        }
-        if (!content) {
-          try {
-            const items = await navigator.clipboard.read();
-            debugSource = "navigator.read()";
-            for (const item of items) {
-              if (item.types.includes("text/html")) {
-                const blob = item.getType("text/html");
-                const h = await (await blob).text();
-                const m2 = h.match(/SourceURL:\s*(https?:\/\/[^\s<"]+)/i);
-                if (m2) url = m2[1];
-                const d2 = new DOMParser().parseFromString(h, "text/html");
-                const t2 = d2.body && d2.body.textContent ? d2.body.textContent.trim() : "";
-                if (t2) { content = t2; }
-              }
-            }
-          } catch (e) {
-            debugSource = "error:" + e.message;
-          }
-        }
-        if (!content) {
-          try {
-            const t3 = await navigator.clipboard.readText();
-            debugSource = "readText()";
-            if (t3 && t3.trim()) {
-              content = t3;
-              if (/^https?:\/\//.test(t3.trim())) {
-                url = t3.trim();
-              }
-            }
-          } catch {}
-        }
-        if (!content || content.trim().length === 0) {
-          new import_obsidian.Notice("❌ 剪贴板读不到内容，请在下方粘贴");
-          content = "（在此粘贴高亮文本...）";
-        }
+      editorCallback: (editor) => {
         new CardEditModal(
           this.app,
-          content.trim(),
-          url,
+          "",
+          "",
           this.settings,
           (result) => {
             if (!result) return;
@@ -259,7 +209,6 @@ var WebCardPlugin = class extends import_obsidian.Plugin {
             new import_obsidian.Notice("✅ Web Card 已插入");
           }
         ).open();
-        console.log("WebCard: source=" + debugSource, "content=" + content.slice(0, 60), "url=" + url);
       }
     });
     this.addCommand({
@@ -272,12 +221,18 @@ var WebCardPlugin = class extends import_obsidian.Plugin {
           new import_obsidian.Notice("请先选中文本");
           return;
         }
-        new CardEditModal(this.app, selected.trim(), "", this.settings, (result) => {
-          if (!result) return;
-          const card = generateCard(result.text, result.url, this.settings);
-          editor.replaceSelection(card);
-          new import_obsidian.Notice("✅ Web Card 已插入");
-        }).open();
+        new CardEditModal(
+          this.app,
+          selected.trim(),
+          "",
+          this.settings,
+          (result) => {
+            if (!result) return;
+            const card = generateCard(result.text, result.url, this.settings);
+            editor.replaceSelection(card);
+            new import_obsidian.Notice("✅ Web Card 已插入");
+          }
+        ).open();
       }
     });
     this.addSettingTab(new WebCardSettingTab(this.app, this));
