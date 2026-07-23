@@ -53,25 +53,39 @@ function extractSiteName(url) {
     return url;
   }
 }
+
+// 生成缩略网址显示文本：保留域名 + 路径前20字符
+function shortUrl(url) {
+  try {
+    const u = new URL(url);
+    let path = u.pathname + u.search;
+    if (path.length > 25) path = path.slice(0, 22) + "…";
+    return u.hostname + path;
+  } catch {
+    return url.length > 40 ? url.slice(0, 37) + "…" : url;
+  }
+}
+
 function generateCard(text, url, settings) {
   const siteName = extractSiteName(url);
   const formattedUrl = url || "无来源";
   const date = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
   const escapedText = text.replace(/\n{3,}/g, "\n\n").trim();
   const safeText = escapedText.replace(/\[/g, "\\[").replace(/\]/g, "\\]").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+  const display = shortUrl(formattedUrl);
   switch (settings.defaultFormat) {
     case "callout":
       return `> [!quote]+ ${siteName}
 > ${safeText.replace(/\n/g, "\n> ")}
 >
-> — *来源：[${siteName}](${formattedUrl})*  ·  ${date}
+> — *来源：[${display}](${formattedUrl})*  ·  ${date}
 
 `;
     case "codeblock":
       return `\`\`\`card
 📝 ${safeText}
 
-🔗 [${siteName}](${formattedUrl})
+🔗 [${display}](${formattedUrl})
 📅 ${date}
 \`\`\`
 
@@ -87,13 +101,12 @@ date: ${date}
 > ${safeText.replace(/\n/g, "\n> ")}
 
 ---
-🔗 [${siteName}](${formattedUrl}) · ${date}
+🔗 [${display}](${formattedUrl}) · ${date}
 
 `;
   }
 }
 
-// 从 URL 的 #:~:text= 片段解析高亮文本
 function parseTextFragment(url) {
   if (!url || typeof url !== "string") return null;
   const match = url.match(/:~:text=(.*?)(?:&|$)/);
@@ -105,12 +118,6 @@ function parseTextFragment(url) {
     }
   }
   return null;
-}
-
-// 去除 URL 中的 #:~:text 片段，保留纯净 URL
-function cleanUrl(url) {
-  if (!url) return "";
-  return url.replace(/#:~:text.*$/, "");
 }
 
 var CardEditModal = class extends import_obsidian.Modal {
@@ -157,7 +164,7 @@ var CardEditModal = class extends import_obsidian.Modal {
             const fragText = parseTextFragment(text);
             if (fragText) {
               textArea.value = fragText;
-              urlInput.value = cleanUrl(text);
+              urlInput.value = text;
             } else if (/^https?:\/\//.test(text.trim()) && !textArea.value) {
               urlInput.value = text.trim();
             }
@@ -232,7 +239,7 @@ var WebCardPlugin = class extends import_obsidian.Plugin {
             const fragText = parseTextFragment(trimmed);
             if (fragText) {
               content = fragText;
-              url = cleanUrl(trimmed);
+              url = trimmed;
             } else if (/^https?:\/\//.test(trimmed)) {
               url = trimmed;
             } else {
