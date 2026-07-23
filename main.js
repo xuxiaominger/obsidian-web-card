@@ -59,10 +59,10 @@ function generateCard(text, url, settings) {
   const date = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
   const escapedText = text.replace(/\n{3,}/g, "\n\n").trim();
   const safeText = escapedText.replace(/\[/g, "\\[").replace(/\]/g, "\\]").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
-  let card2 = "";
+  let card = "";
   switch (settings.defaultFormat) {
     case "callout":
-      card2 = `> [!quote]+ ${siteName}
+      card = `> [!quote]+ ${siteName}
 > ${safeText.replace(/\n/g, "\n> ")}
 >
 > — *来源：[${siteName}](${formattedUrl})*  ·  ${date}
@@ -70,7 +70,7 @@ function generateCard(text, url, settings) {
 `;
       break;
     case "codeblock":
-      card2 = `\`\`\`card
+      card = `\`\`\`card
 📝 ${safeText}
 
 🔗 [${siteName}](${formattedUrl})
@@ -80,7 +80,7 @@ function generateCard(text, url, settings) {
 `;
       break;
     case "embed":
-      card2 = `---
+      card = `---
 source: "${formattedUrl}"
 site: "${siteName}"
 date: ${date}
@@ -95,7 +95,7 @@ date: ${date}
 `;
       break;
   }
-  return card2;
+  return card;
 }
 var CardEditModal = class extends import_obsidian.Modal {
   constructor(app, text, url, settings, onSubmit) {
@@ -177,146 +177,132 @@ var CardEditModal = class extends import_obsidian.Modal {
   }
 };
 
-function extractFromClipboardEvent(e) {
-  let content = "", url = "";
-  if (!e.clipboardData) return { content, url };
-  const html = e.clipboardData.getData("text/html");
-  const text = e.clipboardData.getData("text/plain");
-  const uriList = e.clipboardData.getData("text/uri-list");
-  if (html) {
-    const m = html.match(/SourceURL:\s*(https?:\/\/[^\s<"]+)/i);
-    if (m) url = m[1];
-    const d = new DOMParser().parseFromString(html, "text/html");
-    const t = d.body && d.body.textContent ? d.body.textContent.trim() : "";
-    if (t && t.length > 0) content = t;
-  }
-  if (!content && text) {
-    content = text;
-  }
-  if (!url && uriList) {
-    url = uriList.trim().split("\n")[0];
-  }
-  return { content, url };
+function readClipboardHTML() {
+  let html = "", text = "", uriList = "";
+  try {
+    const eReq = typeof require !== "undefined" ? require : null;
+    const winReq = window.require || null;
+    const er = (eReq && eReq("electron")) || (winReq && winReq("electron")) || null;
+    if (er && er.clipboard) {
+      html = er.clipboard.readHTML() || "";
+      text = er.clipboard.readText() || "";
+      try { uriList = er.clipboard.read("text/uri-list") || ""; } catch {}
+      return { html, text, uriList, source: "electron" };
+    }
+  } catch {}
+  return { html: "", text: "", uriList: "", source: "none" };
 }
 
 var WebCardPlugin = class extends import_obsidian.Plugin {
   async onload() {
     await this.loadSettings();
-    let pasteData = null;
-    this.registerDomEvent(document, "paste", (e) => {
-      if (e.shiftKey) {
-        e.preventDefault();
-        e.stopPropagation();
-        pasteData = extractFromClipboardEvent(e);
-        const editor = this.getEditor();
-        if (!editor) {
-          new import_obsidian.Notice("请先打开一个笔记");
-          return;
+    this.addCommand({
+      id: "paste-as-web-card",
+      name: "Paste as Web Card",
+      icon: "quote",
+      hotkeys: [{ modifiers: ["Mod", "Shift"], key: "V" }],
+      editorCallback: async (editor) => {
+        let content = "", url = "", debugSource = "";
+        let cb = readClipboardHTML();
+        if (cb.html) {
+          debugSource = "electron:" + cb.source;
+          const m = cb.html.match(/SourceURL:\s*(https?:\/\/[^\s<"]+)/i);
+          if (m) url = m[1];
+          const d = new DOMParser().parseFromString(cb.html, "text/html");
+          const t = d.body && d.body.textContent ? d.body.textContent.trim() : "";
+          if (t) { content = t; }
         }
-        if (!pasteData.content || pasteData.content.trim().length === 0) {
-          new import_obsidian.Notice("剪贴板为空");
-          return;
+        if (!content) {
+          try {
+            const items = await navigator.clipboard.read();
+            debugSource = "navigator.read()";
+            for (const item of items) {
+              if (item.types.includes("text/html")) {
+                const blob = item.getType("text/html");
+                const h = await (await blob).text();
+                const m2 = h.match(/SourceURL:\s*(https?:\/\/[^\s<"]+)/i);
+                if (m2) url = m2[1];
+                const d2 = new DOMParser().parseFromString(h, "text/html");
+                const t2 = d2.body && d2.body.textContent ? d2.body.textContent.trim() : "";
+                if (t2) { content = t2; }
+              }
+            }
+          } catch (e) {
+            debugSource = "error:" + e.message;
+          }
+        }
+        if (!content) {
+          try {
+            const t3 = await navigator.clipboard.readText();
+            debugSource = "readText()";
+            if (t3 && t3.trim()) {
+              content = t3;
+              if (/^https?:\/\//.test(t3.trim())) {
+                url = t3.trim();
+              }
+            }
+          } catch {}
+        }
+        if (!content || content.trim().length === 0) {
+          new import_obsidian.Notice("❌ 剪贴板读不到内容，请在下方粘贴");
+          content = "（在此粘贴高亮文本...）";
         }
         new CardEditModal(
           this.app,
-          pasteData.content.trim(),
-          pasteData.url,
+          content.trim(),
+          url,
           this.settings,
           (result) => {
             if (!result) return;
-            const card2 = generateCard(
-              result.text,
-              result.url,
-              this.settings
-            );
-            editor.replaceSelection(card2);
+            const card = generateCard(result.text, result.url, this.settings);
+            editor.replaceSelection(card);
             new import_obsidian.Notice("✅ Web Card 已插入");
           }
         ).open();
+        console.log("WebCard: source=" + debugSource, "content=" + content.slice(0, 60), "url=" + url);
       }
     });
-  }
-  getEditor() {
-    const view = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
-    return view ? view.editor : null;
+    this.addCommand({
+      id: "selection-to-web-card",
+      name: "Selection to Web Card",
+      icon: "highlighter",
+      editorCallback: (editor) => {
+        const selected = editor.getSelection();
+        if (!selected || selected.trim().length === 0) {
+          new import_obsidian.Notice("请先选中文本");
+          return;
+        }
+        new CardEditModal(this.app, selected.trim(), "", this.settings, (result) => {
+          if (!result) return;
+          const card = generateCard(result.text, result.url, this.settings);
+          editor.replaceSelection(card);
+          new import_obsidian.Notice("✅ Web Card 已插入");
+        }).open();
+      }
+    });
+    this.addSettingTab(new WebCardSettingTab(this.app, this));
+    this.registerStyles();
   }
   registerStyles() {
     const style = document.createElement("style");
     style.id = "web-card-styles";
-    style.textContent = `
-.callout[data-callout="quote"] {
-  border-left: 4px solid var(--interactive-accent) !important;
-  background: linear-gradient(135deg, var(--background-primary) 0%, var(--background-secondary) 100%) !important;
-  border-radius: 10px !important;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.08) !important;
-}
-.callout[data-callout="quote"] .callout-title {
-  font-size: 1.1em; font-weight: 600; color: var(--interactive-accent);
-  padding-bottom: 6px; border-bottom: 1px solid var(--background-modifier-border); margin-bottom: 8px;
-}
-.callout[data-callout="quote"] .callout-content {
-  font-size: 0.95em; line-height: 1.7; color: var(--text-normal);
-}
-.callout[data-callout="quote"] .callout-content p:last-child {
-  margin-top: 12px; padding-top: 8px;
-  border-top: 1px dashed var(--background-modifier-border);
-  font-size: 0.85em; color: var(--text-muted); text-align: right;
-}
-pre code.language-card {
-  background: linear-gradient(135deg, var(--background-primary) 0%, var(--background-secondary) 100%) !important;
-  border-left: 4px solid var(--interactive-accent);
-  border-radius: 10px; padding: 16px !important;
-  white-space: pre-wrap; font-family: var(--font-interface);
-  font-size: 0.95em; line-height: 1.7; color: var(--text-normal);
-}
-.web-card-modal textarea:focus, .web-card-modal input:focus {
-  outline: 2px solid var(--interactive-accent) !important;
-  outline-offset: -1px;
-}`;
+    style.textContent = ".callout[data-callout=quote]{border-left:4px solid var(--interactive-accent)!important;background:linear-gradient(135deg,var(--background-primary)0%,var(--background-secondary)100%)!important;border-radius:10px!important;box-shadow:0 2px 8px rgba(0,0,0,.08)!important}.callout[data-callout=quote] .callout-title{font-size:1.1em;font-weight:600;color:var(--interactive-accent);padding-bottom:6px;border-bottom:1px solid var(--background-modifier-border);margin-bottom:8px}.callout[data-callout=quote] .callout-content{font-size:.95em;line-height:1.7;color:var(--text-normal)}.callout[data-callout=quote] .callout-content p:last-child{margin-top:12px;padding-top:8px;border-top:1px dashed var(--background-modifier-border);font-size:.85em;color:var(--text-muted);text-align:right}pre code.language-card{background:linear-gradient(135deg,var(--background-primary)0%,var(--background-secondary)100%)!important;border-left:4px solid var(--interactive-accent);border-radius:10px;padding:16px!important;white-space:pre-wrap;font-family:var(--font-interface);font-size:.95em;line-height:1.7;color:var(--text-normal)}.web-card-modal textarea:focus,.web-card-modal input:focus{outline:2px solid var(--interactive-accent)!important;outline-offset:-1px}";
     document.head.appendChild(style);
     this.register(() => style.remove());
   }
-  onunload() {
-    document.getElementById("web-card-styles")?.remove();
-  }
-  async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-  }
-  async saveSettings() {
-    await this.saveData(this.settings);
-  }
+  onunload() { document.getElementById("web-card-styles")?.remove(); }
+  async loadSettings() { this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData()); }
+  async saveSettings() { await this.saveData(this.settings); }
 };
 var WebCardSettingTab = class extends import_obsidian.PluginSettingTab {
-  constructor(app, plugin) {
-    super(app, plugin);
-    this.plugin = plugin;
-  }
+  constructor(app, plugin) { super(app, plugin); this.plugin = plugin; }
   display() {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "Web Card 设置" });
-    containerEl.createEl("p", {
-      text: "自定义卡片插入格式与外观样式。",
-      attr: { style: "color:var(--text-muted);margin-bottom:20px;" }
-    });
-    new import_obsidian.Setting(containerEl).setName("默认卡片格式").setDesc("选择插入卡片时使用的 Markdown 格式").addDropdown(
-      (dd) => dd.addOption("callout", "Callout 引用块 (推荐)").addOption("codeblock", "代码块卡片").addOption("embed", "嵌入式卡片").setValue(this.plugin.settings.defaultFormat).onChange(async (val) => {
-        this.plugin.settings.defaultFormat = val;
-        await this.plugin.saveSettings();
-      })
-    );
-    new import_obsidian.Setting(containerEl).setName("来源标记").setDesc("在卡片底部显示来源网站标记").addToggle(
-      (t) => t.setValue(this.plugin.settings.showSourceBadge).onChange(async (val) => {
-        this.plugin.settings.showSourceBadge = val;
-        await this.plugin.saveSettings();
-      })
-    );
-    new import_obsidian.Setting(containerEl).setName("卡片样式").setDesc("选择卡片的视觉风格").addDropdown(
-      (dd) => dd.addOption("modern", "现代 (渐变+阴影)").addOption("minimal", "极简 (纯色+细边框)").addOption("classic", "经典 (引用线+衬线字体)").setValue(this.plugin.settings.cardStyle).onChange(async (val) => {
-        this.plugin.settings.cardStyle = val;
-        await this.plugin.saveSettings();
-        this.plugin.registerStyles();
-      })
-    );
+    containerEl.createEl("p", { text: "自定义卡片插入格式与外观样式。", attr: { style: "color:var(--text-muted);margin-bottom:20px;" } });
+    new import_obsidian.Setting(containerEl).setName("默认卡片格式").setDesc("选择插入卡片时使用的 Markdown 格式").addDropdown((dd) => dd.addOption("callout", "Callout 引用块 (推荐)").addOption("codeblock", "代码块卡片").addOption("embed", "嵌入式卡片").setValue(this.plugin.settings.defaultFormat).onChange(async (val) => { this.plugin.settings.defaultFormat = val; await this.plugin.saveSettings(); }));
+    new import_obsidian.Setting(containerEl).setName("来源标记").setDesc("在卡片底部显示来源网站标记").addToggle((t) => t.setValue(this.plugin.settings.showSourceBadge).onChange(async (val) => { this.plugin.settings.showSourceBadge = val; await this.plugin.saveSettings(); }));
+    new import_obsidian.Setting(containerEl).setName("卡片样式").setDesc("选择卡片的视觉风格").addDropdown((dd) => dd.addOption("modern", "现代 (渐变+阴影)").addOption("minimal", "极简 (纯色+细边框)").addOption("classic", "经典 (引用线+衬线字体)").setValue(this.plugin.settings.cardStyle).onChange(async (val) => { this.plugin.settings.cardStyle = val; await this.plugin.saveSettings(); this.plugin.registerStyles(); }));
   }
 };
