@@ -92,6 +92,27 @@ date: ${date}
 `;
   }
 }
+
+// 从 URL 的 #:~:text= 片段解析高亮文本
+function parseTextFragment(url) {
+  if (!url || typeof url !== "string") return null;
+  const match = url.match(/:~:text=(.*?)(?:&|$)/);
+  if (match) {
+    try {
+      return decodeURIComponent(match[1].replace(/\+/g, " "));
+    } catch {
+      return match[1];
+    }
+  }
+  return null;
+}
+
+// 去除 URL 中的 #:~:text 片段，保留纯净 URL
+function cleanUrl(url) {
+  if (!url) return "";
+  return url.replace(/#:~:text.*$/, "");
+}
+
 var CardEditModal = class extends import_obsidian.Modal {
   constructor(app, text, url, settings, onSubmit) {
     super(app);
@@ -105,7 +126,7 @@ var CardEditModal = class extends import_obsidian.Modal {
     contentEl.empty();
     contentEl.addClass("web-card-modal");
     contentEl.createEl("h2", { text: "📇 创建 Web Card" });
-    contentEl.createEl("label", { text: "高亮内容（粘贴后自动识别来源）" });
+    contentEl.createEl("label", { text: "高亮内容" });
     const textArea = contentEl.createEl("textarea", {
       attr: {
         rows: "8",
@@ -113,27 +134,33 @@ var CardEditModal = class extends import_obsidian.Modal {
       }
     });
     textArea.value = this.text;
+    contentEl.createEl("label", { text: "来源网址" });
     const urlInput = contentEl.createEl("input", {
       type: "url",
       attr: {
         style: "width:100%;margin-bottom:8px;padding:8px;border-radius:6px;border:1px solid var(--background-modifier-border);background:var(--background-primary);color:var(--text-normal);",
-        placeholder: "来源网址（自动识别，也可手动填写）"
+        placeholder: "来源网址（自动识别，可手动修改）"
       }
     });
     urlInput.value = this.url;
     const that = this;
     textArea.addEventListener("paste", function(e) {
       setTimeout(function() {
-        const val = textArea.value;
-        if (val && /^https?:\/\//.test(val.trim()) && !urlInput.value) {
-          urlInput.value = val.trim();
-          return;
-        }
         if (e.clipboardData) {
           const html = e.clipboardData.getData("text/html");
+          const text = e.clipboardData.getData("text/plain");
           if (html && !urlInput.value) {
             const m = html.match(/SourceURL:\s*(https?:\/\/[^\s<"]+)/i);
             if (m) urlInput.value = m[1];
+          }
+          if (!urlInput.value && text) {
+            const fragText = parseTextFragment(text);
+            if (fragText) {
+              textArea.value = fragText;
+              urlInput.value = cleanUrl(text);
+            } else if (/^https?:\/\//.test(text.trim()) && !textArea.value) {
+              urlInput.value = text.trim();
+            }
           }
         }
       }, 50);
@@ -196,11 +223,27 @@ var WebCardPlugin = class extends import_obsidian.Plugin {
       name: "Paste as Web Card",
       icon: "quote",
       hotkeys: [{ modifiers: ["Mod", "Shift"], key: "V" }],
-      editorCallback: (editor) => {
+      editorCallback: async (editor) => {
+        let content = "", url = "";
+        try {
+          const raw = await navigator.clipboard.readText();
+          if (raw && raw.trim()) {
+            const trimmed = raw.trim();
+            const fragText = parseTextFragment(trimmed);
+            if (fragText) {
+              content = fragText;
+              url = cleanUrl(trimmed);
+            } else if (/^https?:\/\//.test(trimmed)) {
+              url = trimmed;
+            } else {
+              content = trimmed;
+            }
+          }
+        } catch {}
         new CardEditModal(
           this.app,
-          "",
-          "",
+          content,
+          url,
           this.settings,
           (result) => {
             if (!result) return;
